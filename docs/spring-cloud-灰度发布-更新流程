@@ -1,0 +1,53 @@
+spring cloud 灰度发布 更新流程
+这篇文件记录 工作中 spring cloud 灰度发布 更新流程
+
+参考：
+1.https://github.com/jmnarloch/ribbon-discovery-filter-spring-cloud-starter
+2.https://github.com/charlesvhe/spring-cloud-practice
+
+先说第一个项目：
+主要特征： 通过过滤eureak注册表来实现 动态路由。
+优点： 人家打好了包 直接引用就可以 用了。
+缺点：如果对应的实例里面没有对应的标签 就直接报找不到服务了；同时好像只能一级传递标签信息，如果有服务间相互调用标签就不生效了
+
+第二个项目：
+主要特征：通过继承 ZoneAvoidanceRule 来实现自定义路由规则，同时实现了控制标签多级传递
+优点：基本的原理 实现都有了，按作者的话 “剩下的就是根据需求来完善你自己的路由策略啦”
+优化：开代码 现在的路由策略 是重新
+
+@Override public Server choose(Object key) 方法来实现自定义路由的。
+
+缺少了 服务状态判断 和 轮询策略 （AvailabilityPredicate这个类的功能都没有了），最后改标注实在有点麻烦
+
+优化实现：
+1.同样是继承ZoneAvoidanceRule
+通过重写 private CompositePredicate compositePredicate; 过滤规则来实现路由规则
+
+public LabelAndWeightMetadataRule() {
+//ZoneAvoidancePredicate zonePredicate = new ZoneAvoidancePredicate(this,null);
+AvailabilityPredicate availabilityPredicate = new AvailabilityPredicate(this,null);//spring cloud 原有实现规则
+MetadataAwarePredicate metadataAwarePredicate = new MetadataAwarePredicate();//自定义规则
+this.compositePredicate = this.createCompositePredicate( availabilityPredicate,metadataAwarePredicate);
+}
+
+2.更新标签策略
+刚开始都是 通过修改服务实例的 标签来导流请求。这样操作 要等注册表信息缓存更新了才生效 比较麻烦
+后续改成了 通过修改网关 规则来 把请求导流到不同的标签
+
+
+
+
+
+实验项目
+
+https://github.com/xjr100419/sample-spring-microservices-hystrix
+
+2018-09-10 更新
+
+使用中遇到的问题
+
+1.：  feign 没有实现多层传递header，需添加对应过滤器。
+
+2.：有些调用不是经过gateway进来服务的 是一些任务调度的自调用 没有request 上下文 ，就是说没有，也不需要判断标签，直接引用当前项目默认配置eureka.instance.metadataMap.label
+
+3.：MetadataAwarePredicate 做好异常捕获 尽量不影响业务调用

@@ -1,0 +1,74 @@
+flume 收集日志 KafkaSink 的一些记录
+
+原有现状描述：
+项目中用到了 flume 收集日志到 kafka 。然后客户端消费后发送到 es.
+
+问题描述：
+我个人原有的理解是 flume 生产的日志信息 可以开多个客户端 去消费信息的。事实是 只有一个客户端在消费。
+
+找问题过程:
+1.第一个就是 打开kafka 多分区。 config/server.properties ->num.partitions=10
+2.找了一个简单的例子 http://lxw1234.com/archives/2015/10/538.htm 发现分区成功了
+
+3.但发现原有系统消息还是只有一个客户端在消费 当时还是认为没分区成功 消息没平均发到各个分区。
+4.找KafkaSink 多分区的相关信息。一般有两方案：加拦截器 ，自定义分区类 但试了两个方法都没生效。
+5.下flume 源码，因为看的 方案多为1.6的 。而在用的是1.7。 好了源码 提示配置
+|
+
+public static final String KAFKA_PREFIX = “kafka.”;
+public static final String KAFKA_PRODUCER_PREFIX = KAFKA_PREFIX + “producer.”;
+
+kafkaProps.putAll(context.getSubProperties(KAFKA_PRODUCER_PREFIX));
+
+|
+
+最后配置为：
+a3.sinks.k1.kafka.producer.partitioner.class=org.apache.flume.candao.dms2.SimplePartitioner
+
+6.配置成功。到SimplePartitioner 加载失败。原来Partitioner 版本不对。flume 找到对应版本 后又下kafka 源码 。代码：
+|
+import org.apache.kafka.clients.producer.Partitioner;
+import org.apache.kafka.common.Cluster;
+import org.apache.kafka.common.PartitionInfo;
+import org.apache.kafka.common.utils.Utils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class SimplePartitioner implements Partitioner {
+|
+打成jar 发到 flume lib/ 目录下 。
+pom.xml:
+|
+<modelVersion>4.0.0</modelVersion>
+
+<groupId>com.candao</groupId>
+<artifactId>candao-flume-kafka</artifactId>
+<version>1.0</version>
+<name>log</name>
+<packaging>jar</packaging>
+
+<dependencies>
+<dependency>
+<groupId>org.apache.kafka</groupId>
+<artifactId>kafka_2.11</artifactId>
+<version>0.10.0.0</version>
+</dependency>
+</dependencies>
+
+<build>
+<plugins>
+<plugin>
+<groupId>org.apache.maven.plugins</groupId>
+<artifactId>maven-jar-plugin</artifactId>
+</plugin>
+</plugins>
+</build>
+|
+
+7.开启 flume debug日志。发现 信息已经均匀打到各个分区了。但还是只有一个客户端在消费。
+8.查看 客户端代码：原来开了 20个线程去消费了。。即一个客户端就打所有的 分区都占用了。理解kafka 多分区 多消费线程 消费组
